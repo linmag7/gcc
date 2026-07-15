@@ -209,6 +209,7 @@ static rtx alpha_emit_xfloating_compare (enum rtx_code *, rtx, rtx);
 static void alpha_handle_trap_shadows (void);
 static void alpha_align_insns (void);
 static void alpha_override_options_after_change (void);
+static bool alpha_use_lra_p (void);
 
 #if TARGET_ABI_OPEN_VMS
 static void alpha_write_linkage (FILE *, const char *);
@@ -625,6 +626,14 @@ alpha_override_options_after_change (void)
     str_align_functions = "16";
 }
 
+/* Implement TARGET_LRA_P.  */
+
+static bool
+alpha_use_lra_p (void)
+{
+  return alpha_lra_p;
+}
+
 /* Returns 1 if VALUE is a mask that contains full bytes of zero or ones.  */
 
 int
@@ -10817,7 +10826,7 @@ alpha_c_mode_for_floating_type (enum tree_index ti)
 #endif
 
 #undef TARGET_LRA_P
-#define TARGET_LRA_P hook_bool_void_false
+#define TARGET_LRA_P alpha_use_lra_p
 
 #undef TARGET_LEGITIMATE_ADDRESS_P
 #define TARGET_LEGITIMATE_ADDRESS_P alpha_legitimate_address_p
