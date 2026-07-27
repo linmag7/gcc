@@ -1670,14 +1670,23 @@ alpha_secondary_reload (bool in_p, rtx x, reg_class_t rclass_i,
      usually requires a scratch register.  */
   if (!TARGET_BWX && (mode == QImode || mode == HImode || mode == CQImode))
     {
-      if (any_memory_operand (x, mode))
+      /* LRA can ask the secondary-reload hook while the operand is still the
+	 pseudo that is going to be spilled.  Reload passed a real MEM here, but
+	 LRA materializes the stack slot later.  Treat such pseudos like memory
+	 and let reload_in/out<mode> emit a delayed LRA-only pattern.  */
+      bool lra_pseudo_p
+	= (lra_in_progress && REG_P (x)
+	   && REGNO (x) >= FIRST_PSEUDO_REGISTER);
+
+      if (any_memory_operand (x, mode) || lra_pseudo_p)
 	{
 	  if (in_p)
 	    {
-	      if (!aligned_memory_operand (x, mode))
+	      if (lra_pseudo_p || !aligned_memory_operand (x, mode))
 		sri->icode = direct_optab_handler (reload_in_optab, mode);
 	    }
-	  else if (aligned_memory_operand (x, mode) || !TARGET_SAFE_BWA)
+	  else if (lra_pseudo_p
+		   || aligned_memory_operand (x, mode) || !TARGET_SAFE_BWA)
 	    sri->icode = direct_optab_handler (reload_out_optab, mode);
 	  else
 	    sri->icode = code_for_reload_out_safe_bwa (mode);

@@ -58,6 +58,8 @@
   UNSPEC_ATOMIC
   UNSPEC_CMPXCHG
   UNSPEC_XCHG
+  UNSPEC_LRA_RELOAD_IN
+  UNSPEC_LRA_RELOAD_OUT
 ])
 
 ;; UNSPEC_VOLATILE:
@@ -4376,12 +4378,23 @@
 
 (define_expand "reload_in<mode>"
   [(parallel [(match_operand:RELOAD12 0 "register_operand" "=r")
-	      (match_operand:RELOAD12 1 "any_memory_operand" "m")
+	      (match_operand:RELOAD12 1 "nonimmediate_operand" "m")
 	      (match_operand:TI 2 "register_operand" "=&r")])]
   "!TARGET_BWX"
 {
   rtx scratch, seq, addr;
   unsigned regno = REGNO (operands[2]);
+
+  /* LRA invokes the reload_in optab with the source pseudo before the pseudo
+     has been replaced by its spill-slot MEM.  Keep that operation in the RTL
+     stream and split it once reload has materialized the final operand.  */
+  if (lra_in_progress && REG_P (operands[1])
+      && REGNO (operands[1]) >= FIRST_PSEUDO_REGISTER)
+    {
+      emit_insn (gen_alpha_lra_reload_in<mode> (operands[0], operands[1],
+						 operands[2]));
+      DONE;
+    }
 
   /* It is possible that one of the registers we got for operands[2]
      might coincide with that of operands[0] (which is why we made
@@ -4400,13 +4413,118 @@
   DONE;
 })
 
+(define_insn_and_split "alpha_lra_reload_in<mode>"
+  [(set (match_operand:RELOAD12 0 "register_operand" "=r")
+	(match_operand:RELOAD12 1 "nonimmediate_operand" "X"))
+   (clobber (match_operand:TI 2 "register_operand" "=&r"))
+   (unspec [(const_int 0)] UNSPEC_LRA_RELOAD_IN)]
+  "!TARGET_BWX && (lra_in_progress || reload_completed)"
+  "#"
+  "reload_completed"
+  [(const_int 0)]
+{
+  rtx scratch, seq, addr;
+  unsigned regno = REGNO (operands[2]);
+
+  /* If LRA ended up allocating the pseudo after all, this degenerates to a
+     normal register move.  Otherwise the spilled pseudo should now be a MEM.  */
+  if (REG_P (operands[1]))
+    {
+      emit_move_insn (operands[0], operands[1]);
+      DONE;
+    }
+
+  gcc_assert (MEM_P (operands[1]));
+
+  if (regno == REGNO (operands[0]))
+    regno++;
+  scratch = gen_rtx_REG (DImode, regno);
+
+  addr = get_unaligned_address (operands[1]);
+  operands[0] = gen_rtx_REG (DImode, REGNO (operands[0]));
+  seq = gen_unaligned_load<reloadmode> (operands[0], addr,
+					scratch, operands[0]);
+  alpha_set_memflags (seq, operands[1]);
+
+  emit_insn (seq);
+  DONE;
+})
+
 (define_expand "reload_out<mode>"
-  [(parallel [(match_operand:RELOAD12 0 "any_memory_operand" "=m")
+  [(parallel [(match_operand:RELOAD12 0 "nonimmediate_operand" "=m")
 	      (match_operand:RELOAD12 1 "register_operand" "r")
 	      (match_operand:TI 2 "register_operand" "=&r")])]
   "!TARGET_BWX"
 {
   unsigned regno = REGNO (operands[2]);
+
+  /* LRA invokes the reload_out optab with the destination pseudo, before the
+     pseudo has been replaced by its spill-slot MEM.  Keep that operation in
+     the RTL stream and split it once reload has materialized the final
+     operand.  */
+  if (lra_in_progress && REG_P (operands[0])
+      && REGNO (operands[0]) >= FIRST_PSEUDO_REGISTER)
+    {
+      emit_insn (gen_alpha_lra_reload_out<mode> (operands[0], operands[1],
+						  operands[2]));
+      DONE;
+    }
+
+  if (<MODE>mode == CQImode)
+    {
+      operands[0] = gen_lowpart (HImode, operands[0]);
+      operands[1] = gen_lowpart (HImode, operands[1]);
+    }
+
+  if (aligned_memory_operand (operands[0], <MODE>mode))
+    {
+      emit_insn (gen_reload_out<reloadmode>_aligned
+		 (operands[0], operands[1],
+		  gen_rtx_REG (SImode, regno),
+		  gen_rtx_REG (SImode, regno + 1)));
+    }
+  else
+    {
+      gcc_assert (!TARGET_SAFE_BWA);
+
+      rtx addr = get_unaligned_address (operands[0]);
+      rtx scratch1 = gen_rtx_REG (DImode, regno);
+      rtx scratch2 = gen_rtx_REG (DImode, regno + 1);
+      rtx scratch3 = scratch1;
+      rtx seq;
+
+      if (REG_P (addr))
+	scratch1 = addr;
+
+      seq = gen_unaligned_store<reloadmode> (addr, operands[1], scratch1,
+					     scratch2, scratch3);
+      alpha_set_memflags (seq, operands[0]);
+      emit_insn (seq);
+    }
+  DONE;
+})
+
+(define_insn_and_split "alpha_lra_reload_out<mode>"
+  [(set (match_operand:RELOAD12 0 "nonimmediate_operand" "=X")
+	(match_operand:RELOAD12 1 "register_operand" "r"))
+   (clobber (match_operand:TI 2 "register_operand" "=&r"))
+   (unspec [(const_int 0)] UNSPEC_LRA_RELOAD_OUT)]
+  "!TARGET_BWX && (lra_in_progress || reload_completed)"
+  "#"
+  "reload_completed"
+  [(const_int 0)]
+{
+  unsigned regno = REGNO (operands[2]);
+
+  /* If LRA ended up allocating the pseudo after all, this degenerates to a
+     normal register move.  Otherwise the spilled pseudo should now be a MEM.  */
+  if (REG_P (operands[0]))
+    {
+      emit_move_insn (operands[0], operands[1]);
+      DONE;
+    }
+
+  gcc_assert (MEM_P (operands[0]));
 
   if (<MODE>mode == CQImode)
     {
