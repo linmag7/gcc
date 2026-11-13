@@ -10267,6 +10267,10 @@ And in the noreturn case:
 static void
 alpha_file_start (void)
 {
+  /* JIT cleanup clears GTY scalars between compilations.  Relocation
+     sequence numbers must start at one for each assembly output.  */
+  alpha_next_sequence_number = 1;
+
   default_file_start ();
 
   fputs ("\t.set noreorder\n", asm_out_file);
